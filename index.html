@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f1115">
+<title>마켓 대시보드</title>
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--text:#f2f4f7;--sub:#8b93a1;--up:#f04452;--down:#3182f6;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+       padding:max(16px,env(safe-area-inset-top)) 14px max(16px,env(safe-area-inset-bottom));min-height:100vh}
+  header{display:flex;justify-content:space-between;align-items:center;margin:6px 4px 14px}
+  header h1{font-size:18px;font-weight:700}
+  #status{font-size:12px;color:var(--sub)}
+  #status i{display:inline-block;width:8px;height:8px;border-radius:50%;background:#555;margin-right:5px}
+  #status.live i{background:#2ecc71}
+  .grid{display:grid;gap:12px}
+  .card{background:var(--card);border-radius:18px;padding:18px 18px 16px}
+  .top{display:flex;justify-content:space-between;align-items:baseline}
+  .name{font-size:14px;color:var(--sub);font-weight:600}
+  .tag{font-size:11px;color:var(--sub)}
+  .price{font-size:34px;font-weight:700;margin-top:8px;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+  .chg{font-size:15px;margin-top:4px;font-variant-numeric:tabular-nums;color:var(--sub)}
+  .up{color:var(--up)} .down{color:var(--down)}
+  .note{font-size:11px;color:var(--sub);margin-top:6px}
+  .flash-up{animation:fu .5s} .flash-down{animation:fd .5s}
+  @keyframes fu{from{background:#f0445233}to{background:var(--card)}}
+  @keyframes fd{from{background:#3182f633}to{background:var(--card)}}
+  button{background:none;border:1px solid #333a46;color:var(--sub);border-radius:10px;padding:8px 12px;font-size:12px;margin-top:14px}
+  footer{text-align:center;margin-top:6px}
+</style>
+</head>
+<body>
+<header><h1>마켓 대시보드</h1><div id="status"><i></i><span>연결 중…</span></div></header>
+
+<div class="grid">
+  <div class="card" id="c-fx">
+    <div class="top"><span class="name">원/달러 환율</span><span class="tag" id="fx-tag">USD/KRW</span></div>
+    <div class="price" id="fx-p">–</div>
+    <div class="chg" id="fx-c">&nbsp;</div>
+    <div class="note" id="fx-n"></div>
+  </div>
+  <div class="card" id="c-btc">
+    <div class="top"><span class="name">비트코인 (업비트)</span><span class="tag">KRW-BTC</span></div>
+    <div class="price" id="btc-p">–</div>
+    <div class="chg" id="btc-c">&nbsp;</div>
+  </div>
+  <div class="card" id="c-qqq">
+    <div class="top"><span class="name">QQQ</span><span class="tag">Invesco QQQ</span></div>
+    <div class="price" id="qqq-p">–</div>
+    <div class="chg" id="qqq-c">&nbsp;</div>
+    <div class="note" id="qqq-n"></div>
+  </div>
+  <div class="card" id="c-schd">
+    <div class="top"><span class="name">SCHD</span><span class="tag">Schwab US Dividend</span></div>
+    <div class="price" id="schd-p">–</div>
+    <div class="chg" id="schd-c">&nbsp;</div>
+    <div class="note" id="schd-n"></div>
+  </div>
+</div>
+<footer><button id="keyBtn">미국 주식 API 키 설정</button></footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (n, d=0) => Number(n).toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d});
+function setStatus(live, text){ $('status').className = live ? 'live' : ''; $('status').querySelector('span').textContent = text; }
+function paint(key, price, pct, prefix, dec){
+  const pEl = $(key+'-p'), cEl = $(key+'-c');
+  const prev = pEl.dataset.v ? Number(pEl.dataset.v) : null;
+  pEl.textContent = prefix + fmt(price, dec);
+  pEl.dataset.v = price;
+  if (pct != null){
+    const cls = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
+    cEl.className = 'chg ' + cls;
+    cEl.textContent = (pct > 0 ? '▲ ' : pct < 0 ? '▼ ' : '') + Math.abs(pct).toFixed(2) + '%';
+  }
+  if (prev !== null && prev !== price){
+    const card = $('c-'+key); const k = price > prev ? 'flash-up' : 'flash-down';
+    card.classList.remove('flash-up','flash-down'); void card.offsetWidth; card.classList.add(k);
+  }
+}
+
+/* ---------- 업비트: BTC (웹소켓 실시간) + USDT(환율 참고용) ---------- */
+let ws, restTimer;
+function upbitRest(){
+  fetch('https://api.upbit.com/v1/ticker?markets=KRW-BTC,KRW-USDT').then(r=>r.json()).then(arr=>arr.forEach(applyUpbit)).catch(()=>{});
+}
+function applyUpbit(t){
+  if (t.code === 'KRW-BTC' || t.market === 'KRW-BTC'){
+    paint('btc', t.trade_price, (t.signed_change_rate||0)*100, '₩ ', 0);
+    setStatus(true, '실시간');
+  } else if (t.code === 'KRW-USDT' || t.market === 'KRW-USDT'){
+    $('fx-n').textContent = '업비트 USDT 시세 ₩' + fmt(t.trade_price, 0) + ' (실시간 참고)';
+  }
+}
+function connectUpbit(){
+  try{
+    ws = new WebSocket('wss://api.upbit.com/websocket/v1');
+    ws.onopen = () => ws.send(JSON.stringify([{ticket:'dash'},{type:'ticker',codes:['KRW-BTC','KRW-USDT']},{format:'DEFAULT'}]));
+    ws.onmessage = async e => { try{ const txt = typeof e.data === 'string' ? e.data : await e.data.text(); applyUpbit(JSON.parse(txt)); }catch(_){} };
+    ws.onclose = () => { setStatus(false,'재연결 중…'); setTimeout(connectUpbit, 3000); };
+    ws.onerror = () => ws.close();
+  }catch(_){ }
+}
+upbitRest(); connectUpbit();
+restTimer = setInterval(upbitRest, 10000); // 웹소켓 백업
+
+/* ---------- 환율 (USD/KRW) ---------- */
+let fxPrev = null;
+function loadFx(){
+  fetch('https://open.er-api.com/v6/latest/USD').then(r=>r.json()).then(d=>{
+    const v = d.rates.KRW;
+    const pct = fxPrev ? (v - fxPrev) / fxPrev * 100 : null;
+    paint('fx', v, pct, '₩ ', 2);
+    if (!fxPrev) fxPrev = v;
+    if (!$('fx-n').textContent) $('fx-n').textContent = '기준 환율 (약 1시간 단위 갱신)';
+  }).catch(()=>{});
+}
+loadFx(); setInterval(loadFx, 60000);
+
+/* ---------- 미국 주식 (Finnhub 무료 API 키 필요) ---------- */
+const getKey = () => { try{ return localStorage.getItem('finnhub_key') || ''; }catch(_){ return ''; } };
+$('keyBtn').onclick = () => {
+  const k = prompt('Finnhub API 키를 입력하세요 (finnhub.io 무료 가입)', getKey());
+  if (k !== null){ try{ localStorage.setItem('finnhub_key', k.trim()); }catch(_){ } loadStocks(); }
+};
+function loadStocks(){
+  const key = getKey();
+  ['qqq','schd'].forEach(s => {
+    if (!key){ $(s+'-n').textContent = '하단 버튼에서 API 키를 설정하면 표시됩니다'; return; }
+    fetch(`https://finnhub.io/api/v1/quote?symbol=${s.toUpperCase()}&token=${encodeURIComponent(key)}`)
+      .then(r=>r.json()).then(q=>{
+        if (!q.c) { $(s+'-n').textContent = '데이터 없음 (키 확인)'; return; }
+        paint(s, q.c, q.dp, '$ ', 2);
+        $(s+'-n').textContent = '전일 종가 대비 · 미국 장 시간에만 변동';
+      }).catch(()=>{ $(s+'-n').textContent = '불러오기 실패'; });
+  });
+}
+loadStocks(); setInterval(loadStocks, 10000);
+</script>
+</body>
+</html>
